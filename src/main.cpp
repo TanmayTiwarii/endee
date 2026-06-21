@@ -38,6 +38,7 @@
 #include "auth.hpp"
 #include "quant/common.hpp"
 #include "system_sanity/system_sanity.hpp"
+#include "utils/errors.hpp"
 
 using ndd::quant::quantLevelToString;
 using ndd::quant::stringToQuantLevel;
@@ -443,6 +444,9 @@ int main(int argc, char** argv) {
                     // Pass the full index_id to index_manager using the Admin user type
                     index_manager.createIndex(index_id, config, UserType::Admin, size_in_millions);
                     return crow::response(200, "Index created successfully");
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1026, index_id, "Create-index request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::runtime_error& e) {
                     LOG_WARN(1026, index_id, "Create-index request failed: " << e.what());
                     return json_error(409, e.what());
@@ -469,18 +473,16 @@ int main(int argc, char** argv) {
                 std::string index_id = ctx.username + "/" + index_name;
 
                 try {
-                    std::pair<bool, std::string> result =
-                            index_manager.createBackupAsync(index_id, backup_name);
-                    if(!result.first) {
-                        LOG_WARN(1021, ctx.username, index_name, "Create-backup request rejected: " << result.second);
-                        return json_error(400, result.second);
-                    }
+                    std::string backup_job = index_manager.createBackupAsync(index_id, backup_name);
 
                     // Return 202 Accepted with backup_name as job_id
                     crow::json::wvalue response;
-                    response["backup_name"] = result.second;
+                    response["backup_name"] = backup_job;
                     response["status"] = "in_progress";
                     return crow::response(202, response.dump());
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1021, ctx.username, index_name, "Create-backup request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::exception& e) {
                     return json_error_500(ctx.username, index_name, req.url, e.what());
                 }
@@ -520,13 +522,11 @@ int main(int argc, char** argv) {
                 std::string target_index_name = body["target_index_name"].s();
 
                 try {
-                    std::pair<bool, std::string> result =
-                            index_manager.restoreBackup(backup_name, target_index_name, ctx.username);
-                    if(!result.first) {
-                        LOG_WARN(1023, ctx.username, target_index_name, "Restore-backup request rejected: " << result.second);
-                        return json_error(400, result.second);
-                    }
+                    index_manager.restoreBackup(backup_name, target_index_name, ctx.username);
                     return crow::response(201, "Backup restored successfully");
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1023, ctx.username, target_index_name, "Restore-backup request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::exception& e) {
                     return json_error_500(ctx.username, target_index_name, req.url, e.what());
                 }
@@ -539,12 +539,11 @@ int main(int argc, char** argv) {
                                                              const std::string& backup_name) {
                 auto& ctx = app.get_context<AuthMiddleware>(req);
                 try {
-                    std::pair<bool, std::string> result = index_manager.deleteBackup(backup_name, ctx.username);
-                    if(!result.first) {
-                        LOG_WARN(1024, ctx.username, "Delete-backup request rejected: " << result.second);
-                        return json_error(400, result.second);
-                    }
+                    index_manager.deleteBackup(backup_name, ctx.username);
                     return crow::response(204, "Backup deleted successfully");
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1024, ctx.username, "Delete-backup request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::exception& e) {
                     return json_error_500(ctx.username, req.url, e.what());
                 }
@@ -631,19 +630,14 @@ int main(int argc, char** argv) {
                     }
 
                     // Validate backup name
-                    std::pair<bool, std::string> result =
-                            index_manager.validateBackupName(backup_name);
-                    if(!result.first) {
-                        LOG_WARN(1062, ctx.username, "Backup upload request rejected: " << result.second);
-                        return json_error(400, result.second);
-                    }
+                    index_manager.validateBackupName(backup_name);
 
-                    std::pair<bool, std::string> uploadStatus = index_manager.uploadBackup(backup_name, ctx.username, file_content);
-                    if(!uploadStatus.first) {
-                        return json_error(500, uploadStatus.second);
-                    }
+                    index_manager.uploadBackup(backup_name, ctx.username, file_content);
 
                     return crow::response(201, "Backup uploaded successfully");
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1062, ctx.username, "Backup upload request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::exception& e) {
                     return json_error_500(ctx.username, req.url, e.what());
                 }
@@ -729,6 +723,9 @@ int main(int argc, char** argv) {
                         LOG_WARN(1030, ctx.username, index_name, "Delete-index request for missing index");
                         return json_error(404, "Index not found");
                     }
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1031, ctx.username, index_name, "Delete-index request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::runtime_error& e) {
                     LOG_WARN(1031, ctx.username, index_name, "Delete-index request rejected: " << e.what());
                     return json_error(400, e.what());
@@ -865,6 +862,9 @@ int main(int argc, char** argv) {
                     crow::response resp(200, std::string(sbuf.data(), sbuf.size()));
                     resp.add_header("Content-Type", "application/msgpack");
                     return resp;
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1039, ctx.username, index_name, "Search request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::runtime_error& e) {
                     LOG_WARN(1039, ctx.username, index_name, "Search request rejected: " << e.what());
                     return json_error(400, e.what());
@@ -964,6 +964,9 @@ int main(int argc, char** argv) {
                             return json_error(400, "Batch insertion failed");
                         }
                         return crow::response(200);
+                    } catch(const ndd::ApiError& e) {
+                        LOG_WARN(1041, ctx.username, index_name, "Insert request rejected: " << e.what());
+                        return json_error(e.status_code(), e.what());
                     } catch(const std::runtime_error& e) {
                         LOG_WARN(1041, ctx.username, index_name, "Insert request rejected: " << e.what());
                         return json_error(400, e.what());
@@ -1003,6 +1006,9 @@ int main(int argc, char** argv) {
                             }
                             return crow::response(200);
                         }
+                    } catch(const ndd::ApiError& e) {
+                        LOG_WARN(1042, ctx.username, index_name, "Insert request rejected: " << e.what());
+                        return json_error(e.status_code(), e.what());
                     } catch(const std::runtime_error& e) {
                         LOG_WARN(1042, ctx.username, index_name, "Insert request rejected: " << e.what());
                         return json_error(400, e.what());
@@ -1045,6 +1051,9 @@ int main(int argc, char** argv) {
                             crow::response resp(200, std::string(sbuf.data(), sbuf.size()));
                             resp.add_header("Content-Type", "application/msgpack");
                             return resp;
+                        } catch(const ndd::ApiError& e) {
+                            LOG_WARN(1045, ctx.username, index_name, "Get-vector request failed: " << e.what());
+                            return json_error(e.status_code(), e.what());
                         } catch(const std::exception& e) {
                             LOG_DEBUG("Failed to get vector: " << e.what());
                             return json_error_500(ctx.username,
@@ -1072,6 +1081,9 @@ int main(int argc, char** argv) {
                         LOG_WARN(1046, ctx.username, index_name, "Delete-vector request for missing vector id " << vector_id);
                         return json_error(404, "Vector with the given ID does not exist");
                     }
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1047, ctx.username, index_name, "Delete-vector request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::runtime_error& e) {
                     LOG_WARN(1047, ctx.username, index_name, "Delete-vector request rejected: " << e.what());
                     return json_error(400, e.what());
@@ -1116,6 +1128,9 @@ int main(int argc, char** argv) {
                             index_manager.deleteVectorsByFilter(index_id, filter_array);
 
                     return crow::response(200, std::to_string(deleted_count) + " vectors deleted");
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1051, ctx.username, index_name, "Delete-by-filter request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::runtime_error& e) {
                     LOG_WARN(1051, ctx.username, index_name, "Delete-by-filter request rejected: " << e.what());
                     return json_error(400, e.what());
@@ -1165,6 +1180,9 @@ int main(int argc, char** argv) {
                     size_t count = index_manager.updateFilters(index_id, updates);
                     return crow::response(200, std::to_string(count) + " filters updated");
 
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1054, ctx.username, index_name, "Update-filters request rejected: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::runtime_error& e) {
                     LOG_WARN(1054, ctx.username, index_name, "Update-filters request rejected: " << e.what());
                     return json_error(400, e.what());
@@ -1189,6 +1207,9 @@ int main(int argc, char** argv) {
                         return json_error(404, "Index does not exist");
                     }
                     return json_response(make_index_info_payload(*info));
+                } catch(const ndd::ApiError& e) {
+                    LOG_WARN(1056, ctx.username, index_name, "Index-info request failed: " << e.what());
+                    return json_error(e.status_code(), e.what());
                 } catch(const std::runtime_error& e) {
                     LOG_WARN(1056, ctx.username, index_name, "Index-info request failed: " << e.what());
                     return json_error(404, std::string("Error: ") + e.what());
